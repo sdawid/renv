@@ -1,4 +1,7 @@
-#!/usr/bin/env racket
+#!/bin/sh
+#|
+exec racket -t $0 "$@"
+|#
 #lang racket/base
 
 (require racket/system)
