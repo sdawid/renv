@@ -196,11 +196,11 @@ exec racket -t $0 "$@"
              (cons (string-trim name) (string-trim value)))
             (else #f))))
     (else
-     (printf "(~a) Failed to parse: ~a (line ~a in ~a)~%"
-             the-script-name
-             (source-line-text line)
-             (source-line-number line)
-             (source-line-file line))
+     (eprintf "(~a) Failed to parse: ~a (line ~a in ~a)~%"
+              the-script-name
+              (source-line-text line)
+              (source-line-number line)
+              (source-line-file line))
      #f)))
 
 
@@ -221,10 +221,10 @@ exec racket -t $0 "$@"
             (string-join
              (cons (path->string path)
                    (map (λ (a) (string-append "'" a "'")) args)))))
-       (printf "(~a) running: ~a~%-~%" the-script-name command-line)
-       (flush-output)
+       (eprintf "(~a) running: ~a~%-~%" the-script-name command-line)
+       (flush-output (current-error-port))
        (system command-line)))
-    (else (printf "Unknown command: ~a~%" name))))
+    (else (eprintf "Unknown command: ~a~%" name))))
 
 
 
@@ -235,9 +235,9 @@ exec racket -t $0 "$@"
     (with-handlers ((exn:break?
                      (λ (x) (printf "~%(~a) user break~%" the-script-name))))
       (fn))
-    (printf "-~%(~a) time: ~a ms~%"
-            the-script-name
-            (- (current-milliseconds) start))))
+    (eprintf "-~%(~a) time: ~a ms~%"
+             the-script-name
+             (- (current-milliseconds) start))))
 
 
 
