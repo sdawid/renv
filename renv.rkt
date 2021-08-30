@@ -222,6 +222,7 @@ exec racket -t $0 "$@"
              (cons (path->string path)
                    (map (λ (a) (string-append "'" a "'")) args)))))
        (printf "(~a) running: ~a~%-~%" the-script-name command-line)
+       (flush-output)
        (system command-line)))
     (else (printf "Unknown command: ~a~%" name))))
 
