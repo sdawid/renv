@@ -13,32 +13,91 @@ exec racket -t $0 "$@"
 (require rash)
 
 
-; : String
+;; Name of the script
+;; String
 (define the-script-name
-  (let-values (((base name dir?)
+  (let-values (((_base name _dir?)
                 (split-path (find-system-path 'run-file))))
     (path->string name)))
 
 
-; : -> Void
+;; -> Void
 (define (main)
-  (let ((args (vector->list (current-command-line-arguments)))
-        (ctx (load-current-context)))
-    (if (null? args)
-        (show-help ctx)
-        (begin
-          (load-env-files ctx)
-          (run-command (car args) (cdr args) ctx)
-          (values)))))
+  (define args (vector->list (current-command-line-arguments)))
+  (if (null? args)
+      (show-help)
+      (run-command args))
+  (void))
 
 
-; DirPath := Path
-; EnvFile := Path
-; Command := Pairof String Path
+
+; === show help ===
+; ! -> Void
+(define (show-help)
+  (define ctx (load-context (current-directory)))
+  (define lines
+    (append
+     (describe-usage the-script-name)
+     (list-command-files (context-cmds ctx))
+     (list-environment-files (context-envs ctx))))
+  (printf (string-join lines "~%" #:after-last "~%")))
 
 
-; context with references to available commands and environment variables
-; Context := ((envs: Listof EnvFile) (cmds: Listof Command))
+; : String -> ListOf String
+(define (describe-usage script-name)
+  (list
+   (format "Usage: ~a <command> <args>" script-name)))
+
+
+; : AssocListOf String Path -> ListOf String
+(define (list-command-files cmds)
+  (define (format-command-line cmd)
+    (format " - ~a -> ~a"
+            (~a (car cmd) #:min-width 20)
+            (path->string (cdr cmd))))
+  (append
+   (list "" "Available commands:")
+   (map format-command-line cmds)
+   (if (null? cmds)
+       (list " (none)")
+       (list))))
+
+
+; : ListOf Path -> ListOf String
+(define (list-environment-files envs)
+  (define (format-environment-line env)
+    (format " - ~a" (path->string env)))
+  (append
+   (list "" "Environments:")
+   (map format-environment-line envs)
+   (if (null? envs)
+       (list " (none)")
+       (list))))
+
+
+; === run command ===
+; ! (Listof String) -> Void
+(define (run-command args)
+  (define command-name (first args))
+  (define command-args (rest args))
+  (define ctx (load-context (current-directory))) 
+  (load-env-files ctx)
+  (match (assoc command-name (context-cmds ctx))
+    ((cons _ path)
+     (define command-line
+       (string-join
+        (cons (path->string path)
+              (map (λ (a) (string-append "'" a "'")) command-args))))
+     (eprintf "(~a) running: ~a~%-~%" the-script-name command-line)
+     (flush-output (current-error-port))
+     (system command-line))
+    (else (eprintf "Unknown command: ~a~%" command-name))))
+
+
+
+; === context ===
+; Context with references to available commands and environment variables
+; Context := ((envs: ListOf Path) (cmds: AssocListOf String Path))
 (struct context (envs cmds) #:transparent)
 
 ; : Context
@@ -51,21 +110,17 @@ exec racket -t $0 "$@"
            (append (context-cmds child) (context-cmds parent))))
 
 
-; : -> Context
-(define (load-current-context)
-  (load-context-dir (current-directory)))
-
-; : DirPath -> Context
-(define (load-context-dir dir)
+; ! Path -> Context
+(define (load-context dir)
   (load-context-dirs (find-context-dirs dir)))
 
-; : Listof DirPath -> Context
+; ! Listof DirPath -> Context
 (define (load-context-dirs dirs)
   (foldr (λ (dir ctx) (context-append (load-dir-context dir) ctx))
          empty-context
          dirs))
 
-; : DirPath -> Listof DirPath
+; ! DirPath -> Listof DirPath
 (define (find-context-dirs dir)
   (append-map (λ (d)
                 (let ((cmds-dir (build-path d ".cmds")))
@@ -75,7 +130,7 @@ exec racket -t $0 "$@"
               (dir->paths dir)))
 
 
-; : DirPath -> Context
+; ! DirPath -> Context
 (define (load-dir-context dir)
   (let ((files (directory-list dir)))
     (context (find-envs dir files)
@@ -121,45 +176,16 @@ exec racket -t $0 "$@"
 
 
 
-; show help
-; : Context -> Void
-(define (show-help ctx)
-  (printf "Usage: ~a <command> <args>~%" the-script-name)
-  (print-available-commands (context-cmds ctx))
-  (print-available-environments (context-envs ctx)))
-
-; : Listof Command -> Void
-(define (print-available-commands cmds)
-  (printf "~%Available commands:~%")
-  (for-each (λ (cmd)
-              (printf " - ~a -> ~a~%"
-                      (~a (car cmd) #:min-width 20)
-                      (path->string (cdr cmd))))
-            cmds)
-  (when (null? cmds)
-    (printf "  (none)~%")))
-
-
-; : Listof EnvFile -> Void
-(define (print-available-environments envs)
-  (printf "~%Environments:~%")
-  (for-each (λ (env)
-              (printf " - ~a~%"
-                      (path->string env)))
-            envs)
-  (when (null? envs)
-    (printf "  (none)~%")))
-
 
 
 ; loads environment variables from `.env` files
-; : Context -> Void
+; ! Context -> Void
 (define (load-env-files ctx)
   (for-each (λ (vars) (for-each load-envar vars))
             (map parse-env-file (context-envs ctx))))
 
 ; EnvVar := Pairof String String
-; : EnvVar -> Void
+; ! EnvVar -> Void
 (define (load-envar envar)
   (putenv (car envar) (cdr envar)))
 
@@ -171,7 +197,7 @@ exec racket -t $0 "$@"
 ;
 ; Empty lines and lines starting with '#' will be ignored.
 ;
-; : EnvFile -> Listof EnvVar
+; ! EnvFile -> Listof EnvVar
 (define (parse-env-file path)
   (filter-map parse-envar (file->source-lines path)))
 
@@ -182,7 +208,7 @@ exec racket -t $0 "$@"
 (struct source-line (text number file) #:transparent)
 
 
-; : SourceLine -> Option EnvVar
+; ! SourceLine -> Option EnvVar
 (define (parse-envar line)
   (cond
     ((regexp-match #rx"^ *#" (source-line-text line))
@@ -212,24 +238,10 @@ exec racket -t $0 "$@"
          lines)))
 
 
-; runs command if exists
-; : String (Listof String) Context -> Void
-(define (run-command name args ctx)
-  (match (assoc name (context-cmds ctx))
-    ((cons _ path)
-     (let ((command-line
-            (string-join
-             (cons (path->string path)
-                   (map (λ (a) (string-append "'" a "'")) args)))))
-       (eprintf "(~a) running: ~a~%-~%" the-script-name command-line)
-       (flush-output (current-error-port))
-       (system command-line)))
-    (else (eprintf "Unknown command: ~a~%" name))))
-
 
 
 ; executes given function and prints exection time
-; : (-> Void) -> Void
+; ! (-> Void) -> Void
 (define (measure-execution-time fn)
   (let ((start (current-milliseconds)))
     (with-handlers ((exn:break?
