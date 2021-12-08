@@ -12,6 +12,8 @@ exec racket -t $0 "$@"
 (require racket/list)
 (require rash)
 
+(module+ test
+  (require rackunit))
 
 ;; Name of the script
 ;; String
@@ -187,7 +189,7 @@ exec racket -t $0 "$@"
 
 ;; Envar is (struct String String)
 ;; (struct name value) contains name and value of an environment variable
-(struct envar (name value))
+(struct envar (name value) #:transparent)
 
 
 ;; ! Envar -> Void
@@ -205,16 +207,36 @@ exec racket -t $0 "$@"
 ;
 ; ! EnvFile -> Listof Envar
 (define (parse-env-file path)
-  (filter-map parse-envar (file->source-lines path)))
+  (define (log-errors result)
+    (cond
+      ((envar? result) result)
+      ((string? result) (eprintf result) #f)
+      (else #f)))
+  (filter-map (compose log-errors parse-envar)
+              (file->source-lines path)))
 
 
-; Source line - line of text with metadata (line number, file path)
-;
-; SourceLine := ((text: String) (number: Integer) (file: Path))
+;; SourceLine is (struct String Number Path)
+;; (struct text number file)
+;;     contains a text line together with a source file and a line number
 (struct source-line (text number file) #:transparent)
 
 
-; ! SourceLine -> Option Envar
+;; SourceLine -> Envar | String | #f
+;; Parses envar from a file line.
+;; Possible outputs:
+;; - Envar  - environmental variable name and value
+;; - String - error message describing parsing failure
+;; - #f     - the line doesn't contain env var (is empty or a comment)
+(module+ test
+  (check-equal? (parse-envar (source-line "FOO=some value" 0 "file"))
+                (envar "FOO" "some value"))
+  (check-equal? (parse-envar (source-line " FOO_BAR = another value " 0 "file"))
+                (envar "FOO_BAR" "another value"))
+  (check-equal? (parse-envar (source-line "# a comment" 0 "file"))
+                #f)
+  (check-regexp-match ".*Failed.*foo bar.*"
+                      (parse-envar (source-line "foo bar" 0 "file"))))
 (define (parse-envar line)
   (cond
     ((regexp-match #rx"^ *#" (source-line-text line))
@@ -228,12 +250,11 @@ exec racket -t $0 "$@"
              (envar (string-trim name) (string-trim value)))
             (else #f))))
     (else
-     (eprintf "(~a) Failed to parse: ~a (line ~a in ~a)~%"
+     (format "(~a) Failed to parse: ~a (line ~a in ~a)~%"
               the-script-name
               (source-line-text line)
               (source-line-number line)
-              (source-line-file line))
-     #f)))
+              (source-line-file line)))))
 
 
 ; : Path -> Listof SourceLine
