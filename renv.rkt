@@ -181,13 +181,19 @@ exec racket -t $0 "$@"
 ; loads environment variables from `.env` files
 ; ! Context -> Void
 (define (load-env-files ctx)
-  (for-each (λ (vars) (for-each load-envar vars))
+  (for-each (λ (vars) (for-each envar-load vars))
             (map parse-env-file (context-envs ctx))))
 
-; EnvVar := Pairof String String
-; ! EnvVar -> Void
-(define (load-envar envar)
-  (putenv (car envar) (cdr envar)))
+
+;; Envar is (struct String String)
+;; (struct name value) contains name and value of an environment variable
+(struct envar (name value))
+
+
+;; ! Envar -> Void
+;; set environment variable with envar's name to envar's value
+(define (envar-load e)
+  (putenv (envar-name e) (envar-value e)))
 
 
 ; Loads environmental variables from the given file.
@@ -197,7 +203,7 @@ exec racket -t $0 "$@"
 ;
 ; Empty lines and lines starting with '#' will be ignored.
 ;
-; ! EnvFile -> Listof EnvVar
+; ! EnvFile -> Listof Envar
 (define (parse-env-file path)
   (filter-map parse-envar (file->source-lines path)))
 
@@ -208,7 +214,7 @@ exec racket -t $0 "$@"
 (struct source-line (text number file) #:transparent)
 
 
-; ! SourceLine -> Option EnvVar
+; ! SourceLine -> Option Envar
 (define (parse-envar line)
   (cond
     ((regexp-match #rx"^ *#" (source-line-text line))
@@ -219,7 +225,7 @@ exec racket -t $0 "$@"
      => (λ (result)
           (match result
             ((list _ name value)
-             (cons (string-trim name) (string-trim value)))
+             (envar (string-trim name) (string-trim value)))
             (else #f))))
     (else
      (eprintf "(~a) Failed to parse: ~a (line ~a in ~a)~%"
