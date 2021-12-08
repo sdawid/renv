@@ -163,8 +163,17 @@ exec racket -t $0 "$@"
               files))
 
 
-; directory with it's ancestors
-; : Path -> Listof Path
+;; Path -> Listof Path
+;; Creates a list with the directory and all it's ancestors.
+(module+ test
+  (define p string->path)
+  (check-equal? (dir->paths (p "/"))
+                (list (p "/")))
+  (check-equal? (dir->paths (p "/abc/foo/bar"))
+                (list (p "/abc/foo/bar")
+                      (p "/abc/foo")
+                      (p "/abc")
+                      (p "/"))))
 (define (dir->paths dir)
   (foldl (λ (name paths)
            (cond
@@ -175,7 +184,6 @@ exec racket -t $0 "$@"
                     paths))))
          '()
          (explode-path dir)))
-
 
 
 
