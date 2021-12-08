@@ -213,37 +213,37 @@ exec racket -t $0 "$@"
       ((string? result) (eprintf result) #f)
       (else #f)))
   (filter-map (compose log-errors parse-envar)
-              (file->source-lines path)))
+              (file->filelines path)))
 
 
-;; SourceLine is (struct String Number Path)
+;; FileLine is (struct String Number Path)
 ;; (struct text number file)
-;;     contains a text line together with a source file and a line number
-(struct source-line (text number file) #:transparent)
+;;     contains a text line together with a line number and a source file
+(struct fileline (text number file) #:transparent)
 
 
-;; SourceLine -> Envar | String | #f
+;; FileLine -> Envar | String | #f
 ;; Parses envar from a file line.
 ;; Possible outputs:
 ;; - Envar  - environmental variable name and value
 ;; - String - error message describing parsing failure
 ;; - #f     - the line doesn't contain env var (is empty or a comment)
 (module+ test
-  (check-equal? (parse-envar (source-line "FOO=some value" 0 "file"))
+  (check-equal? (parse-envar (fileline "FOO=some value" 0 "file"))
                 (envar "FOO" "some value"))
-  (check-equal? (parse-envar (source-line " FOO_BAR = another value " 0 "file"))
+  (check-equal? (parse-envar (fileline " FOO_BAR = another value " 0 "file"))
                 (envar "FOO_BAR" "another value"))
-  (check-equal? (parse-envar (source-line "# a comment" 0 "file"))
+  (check-equal? (parse-envar (fileline "# a comment" 0 "file"))
                 #f)
   (check-regexp-match ".*Failed.*foo bar.*"
-                      (parse-envar (source-line "foo bar" 0 "file"))))
+                      (parse-envar (fileline "foo bar" 0 "file"))))
 (define (parse-envar line)
   (cond
-    ((regexp-match #rx"^ *#" (source-line-text line))
+    ((regexp-match #rx"^ *#" (fileline-text line))
      #f) ; skip comment lines
-    ((regexp-match #rx"^ *$" (source-line-text line))
+    ((regexp-match #rx"^ *$" (fileline-text line))
      #f) ; skip empty lines
-    ((regexp-match #rx"(.*?)=(.*)" (source-line-text line))
+    ((regexp-match #rx"(.*?)=(.*)" (fileline-text line))
      => (λ (result)
           (match result
             ((list _ name value)
@@ -252,15 +252,15 @@ exec racket -t $0 "$@"
     (else
      (format "(~a) Failed to parse: ~a (line ~a in ~a)~%"
               the-script-name
-              (source-line-text line)
-              (source-line-number line)
-              (source-line-file line)))))
+              (fileline-text line)
+              (fileline-number line)
+              (fileline-file line)))))
 
 
-; : Path -> Listof SourceLine
-(define (file->source-lines path)
+; : Path -> Listof FileLine
+(define (file->filelines path)
   (let ((lines (file->lines path)))
-    (map (λ (number line) (source-line line number path))
+    (map (λ (number line) (fileline line number path))
          (range 1 (add1 (length lines)))
          lines)))
 
