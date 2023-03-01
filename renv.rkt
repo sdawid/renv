@@ -20,22 +20,21 @@ exec racket -t $0 "$@"
 ;; String
 ;; Name of this script.
 (define the-script-name
-  (let-values (((_base name _dir?)
-                (split-path (find-system-path 'run-file))))
-    (path->string name)))
+  (match/values (split-path (find-system-path 'run-file))
+    [(_ name _) (path->string name)]))
 
 
 ;; ! -> Void
 ;; Main entry point.
 (define (main!)
   (with-handlers ((exn:break? (λ (_) (log! "user break"))))
-    (let ((start-ms (current-milliseconds))
-           (args (vector->list (current-command-line-arguments))))
-      (if (null? args)
-          (show-help!)
-          (exit (begin0
-                 (run-command! args)
-                 (log! "time: ~a ms" (- (current-milliseconds) start-ms))))))))
+    (define start-ms (current-milliseconds))
+    (define args (vector->list (current-command-line-arguments)))
+    (if (null? args)
+        (show-help!)
+        (exit (begin0
+               (run-command! args)
+               (log! "time: ~a ms" (- (current-milliseconds) start-ms)))))))
 
 
 ;; ! -> Void
@@ -60,9 +59,7 @@ exec racket -t $0 "$@"
   (append
    (list "" "Available commands:")
    (map format-cmd cmds)
-   (if (null? cmds)
-       (list " (none)")
-       (list))))
+   (if (null? cmds) (list " (none)") (list))))
 
 
 ;; ListOf Path -> ListOf String
@@ -78,31 +75,30 @@ exec racket -t $0 "$@"
        (list))))
 
 
-;; ! (Listof String) -> Errno
+;; ! (Listof String) -> ErrorCode
 ;; Runs a command with a given name and optional command line arguments.
 (define (run-command! args)
-  (let ((command-name (first args))
-        (command-args (rest args))
-        (ctx (load-current-context!)))
-     (match (assoc command-name (context-cmds ctx))
-       ((cons _ path)
-        (let ((command-line (path->command-line path command-args)))
-          (load-env-variables! (context-envs ctx))
-          (log! "running: ~a" command-line)
-          (flush-output (current-error-port))
-          (system/exit-code command-line)))
-       (else
-        (begin
-         (log! "Unknown command: ~a~%" command-name)
-         1)))))
+  (define command-name (first args))
+  (define command-args (rest args))
+  (define ctx (load-current-context!))
+  (match (assoc command-name (context-cmds ctx))
+    [(cons _ path)
+     (define command-line (path->command-line path command-args))
+     (load-env-variables! (context-envs ctx))
+     (log! "running: ~a" command-line)
+     (flush-output (current-error-port))
+     (system/exit-code command-line)]
+    [else
+     (log! "Unknown command: ~a~%" command-name)
+     1 #| error code (failure) |#]))
 
 
 ;; Path -> Listof String -> String
 ;; Creates command line to run the file with given arguments.
 (define (path->command-line path args)
-  (string-join
-   (cons (path->string path)
-         (map (λ (a) (string-append "'" a "'")) args))))
+  (define command-str (path->string path))
+  (define quoted-args (map (λ (a) (format "'~a'" a)) args))
+  (string-join (cons command-str quoted-args)))
 
 
 ;; Context := ((envs: Listof EnvFile) (cmds: Listof CmdFile))
@@ -137,15 +133,16 @@ exec racket -t $0 "$@"
 ;; (Path -> Listof Path) -> Path -> Context
 ;; Loads a context for the given directory.
 (define (load-context list-dir dir)
-  (let ((files (append-map list-dir (context-dirs dir))))
-    (context (filter env-file? files)
-             (filter car (map (λ (p) (cons (cmd-file? p) p)) files)))))
+  (define files (append-map list-dir (context-dirs dir)))
+  (context (filter env-file? files)
+           (filter car (map (λ (p) (cons (cmd-file? p) p)) files))))
 (module+ test
-  (define fs (list (p-list "/a/b/c" "/a/b/c/.cmds" "/a/b/c/cmd-abc.sh" "/a/b/c/.cmd-xyz" "/a/b/c/.cmd.env")
-                   (p-list "/a/b/c/.cmds" "/a/b/c/.cmds/cmd-foo" "/a/b/c/.cmds/cmd.env")
-                   (p-list "/a/b" "/a/b/cmd-foo")
-                   (p-list "/a")
-                   (p-list "/")))
+  (define fs
+    (list (p-list "/a/b/c" "/a/b/c/.cmds" "/a/b/c/cmd-abc.sh" "/a/b/c/.cmd-xyz" "/a/b/c/.cmd.env")
+          (p-list "/a/b/c/.cmds" "/a/b/c/.cmds/cmd-foo" "/a/b/c/.cmds/cmd.env")
+          (p-list "/a/b" "/a/b/cmd-foo")
+          (p-list "/a")
+          (p-list "/")))
   (define (list-dir path)
     (let ((found (assoc path fs)))
       (if found (cdr found) '())))
@@ -160,9 +157,9 @@ exec racket -t $0 "$@"
 ;; Path -> Boolean
 ;; Check if the given file is an environment file.
 (define (env-file? path)
-  (let ((filename (path->string (path-last-element path))))
-    (or (equal? filename ".cmd.env")
-        (equal? filename "cmd.env"))))
+  (define filename (path->string (path-last-element path)))
+  (or (equal? filename ".cmd.env")
+      (equal? filename "cmd.env")))
 (module+ test
   (check-true (env-file? (p ".cmd.env")))
   (check-true (env-file? (p "cmd.env")))
@@ -173,10 +170,10 @@ exec racket -t $0 "$@"
 ;; Path -> String
 ;; Check if the given file is a command file.
 (define (cmd-file? path)
-  (match (regexp-match #rx"^(\\.?)cmd-(.+?)(\\.[^.]*)?$"
-                       (path->string (path-last-element path)))
-    ((list _ _ name _) name)
-    (else #f)))
+  (define filename (path->string (path-last-element path)))
+  (match (regexp-match #rx"^(\\.?)cmd-(.+?)(\\.[^.]*)?$" filename)
+    [(list _ _ name _) name]
+    [else #f]))
 (module+ test
   (check-equal? (cmd-file? (p "/p")) #f)
   (check-equal? (cmd-file? (p "/cmd-p.sh")) "p")
@@ -186,8 +183,9 @@ exec racket -t $0 "$@"
 ;; Path -> Listof Path
 ;; Creates a list of context directories.
 (define (context-dirs path)
-  (append-map (λ (p) (list p (build-path p ".cmds")))
-              (prefix-paths path)))
+  (define (with-cmds-subdir dir)
+    (list dir (build-path dir ".cmds")))
+  (append-map with-cmds-subdir (prefix-paths path)))
 (module+ test
   (check-equal? (context-dirs (p "/a/b"))
                 (p-list "/a/b" "/a/b/.cmds" "/a" "/a/.cmds" "/" "/.cmds")))
@@ -198,8 +196,8 @@ exec racket -t $0 "$@"
 (define (prefix-paths path)
   (define (append-subpath path-element paths)
     (cond
-      ((null? paths) (list path-element))
-      (else (cons (build-path (car paths) path-element) paths))))
+      [(null? paths) (list path-element)]
+      [else (cons (build-path (car paths) path-element) paths)]))
   (foldl append-subpath '() (explode-path path)))
 (module+ test
   (check-equal? (prefix-paths (p "/"))
@@ -214,7 +212,6 @@ exec racket -t $0 "$@"
                         "a")))
 
 
-
 ;; Envar is (struct String String)
 ;; (struct name value) contains name and value of an environment variable
 (struct envar (name value) #:transparent)
@@ -226,28 +223,20 @@ exec racket -t $0 "$@"
   (putenv (envar-name e) (envar-value e)))
 
 
-;; FileLine is (struct String Number Path)
-;; (struct text number file)
-;;     contains a text line together with a line number and a source file
-(struct fileline (text number file) #:transparent)
-
-
 ; loads environment variables from `.env` files
 ; ! Listof Path -> Void
 (define (load-env-variables! paths)
-  (for-each (λ (x) (if (string? x) (log! x) (envar-load! x)))
-            (read-envars file->lines paths)))
+  (for-each
+   (λ (x) (if (string? x) (log! x) (envar-load! x)))
+   (read-envars file->lines paths)))
 
 
 ;; (Path -> Listof String) -> Listof Path -> Listof (Envar | String)
 ;; Parse environment variables from the given list of files.
 (define (read-envars file->lines paths)
-  (define (file->filelines path)
-    (let* ((lines (file->lines path))
-           (numbers (range 1 (add1 (length lines)))))
-    (map (λ (n l) (fileline l n path)) numbers lines)))
-  (filter-map parse-envar
-              (append-map file->filelines paths)))
+  (append-map
+   (λ (p) (parse-envar-file file->lines p))
+   paths))
 (module+ test
   (define files '(("foo" "a=a1" "" "b=b1")
                   ("bar" "a=a2" "abc")))
@@ -261,38 +250,43 @@ exec racket -t $0 "$@"
                       "Failed to parse envar: 'abc' (bar:2)")))
 
 
-;; FileLine -> Envar | String | #f
+;; (Path -> Listof String) -> Path -> Listof (Envar | String)
+;; Parse environment variables from the file.
+(define (parse-envar-file file->lines path)
+  (define lines (file->lines path))
+  (define numbers (range 1 (add1 (length lines))))
+  (filter-map
+   (λ (line number) (parse-envar line path number))
+   lines
+   numbers))
+
+
+;; String -> Path -> Number -> Envar | String | #f
 ;; Parses envar from a file line.
 ;; Possible outputs:
 ;; - Envar  - environmental variable name and value
 ;; - String - error message describing parsing failure
 ;; - #f     - the line doesn't contain env var (is empty or a comment)
-(define (parse-envar line)
+(define (parse-envar line path number)
   (cond
-    ((regexp-match #rx"^ *#" (fileline-text line))
-     #f) ; skip comment lines
-    ((regexp-match #rx"^ *$" (fileline-text line))
-     #f) ; skip empty lines
-    ((regexp-match #rx"(.*?)=(.*)" (fileline-text line))
+    [(regexp-match #rx"^ *#" line) #f] ; skip comment lines
+    [(regexp-match #rx"^ *$" line) #f] ; skip empty lines
+    [(regexp-match #rx"(.*?)=(.*)" line)
      => (λ (result)
           (match result
-            ((list _ name value)
-             (envar (string-trim name) (string-trim value)))
-            (else #f))))
-    (else
-     (format "Failed to parse envar: '~a' (~a:~a)"
-              (fileline-text line)
-              (fileline-file line)
-              (fileline-number line)))))
+            [(list _ name value) (envar (string-trim name) (string-trim value))]
+            [else #f]))]
+    [else
+     (format "Failed to parse envar: '~a' (~a:~a)" line path number)]))
 (module+ test
-  (check-equal? (parse-envar (fileline "FOO=some value" 0 "file"))
+  (check-equal? (parse-envar "FOO=some value" (p "file") 0)
                 (envar "FOO" "some value"))
-  (check-equal? (parse-envar (fileline " FOO_BAR = another value " 0 "file"))
+  (check-equal? (parse-envar " FOO_BAR = another value " (p "file") 0)
                 (envar "FOO_BAR" "another value"))
-  (check-equal? (parse-envar (fileline "# a comment" 0 "file"))
+  (check-equal? (parse-envar "# a comment" (p "file") 0)
                 #f)
-  (check-equal? "Failed to parse envar: 'foo bar' (file:0)"
-                (parse-envar (fileline "foo bar" 0 "file"))))
+  (check-equal? (parse-envar "foo bar" (p "file") 0)
+                "Failed to parse envar: 'foo bar' (file:0)"))
 
 
 ;; ! String -> Void
@@ -309,8 +303,8 @@ exec racket -t $0 "$@"
 (module+ test
   (check-equal? (path-last-element (p "/a/b")) (p "b"))
   (check-equal? (path-last-element (p "a/b")) (p "b"))
-  (check-equal? (path-last-element (p "/")) (p "/")))                             
-  
+  (check-equal? (path-last-element (p "/")) (p "/")))
+
 
 ;; Execute the script.
 (main!)
