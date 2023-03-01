@@ -10,7 +10,6 @@ exec racket -t $0 "$@"
 (require racket/file)
 (require racket/format)
 (require racket/list)
-(require rash)
 
 (module+ test
   (require rackunit)
