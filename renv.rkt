@@ -28,10 +28,14 @@ exec racket -t $0 "$@"
 ;; ! -> Void
 ;; Main entry point.
 (define (main!)
-  (define args (vector->list (current-command-line-arguments)))
-  (if (null? args)
-      (show-help!)
-      (run-command! args)))
+  (with-handlers ((exn:break? (λ (_) (log! "user break"))))
+    (let ((start-ms (current-milliseconds))
+           (args (vector->list (current-command-line-arguments))))
+      (if (null? args)
+          (show-help!)
+          (exit (begin0
+                 (run-command! args)
+                 (log! "time: ~a ms" (- (current-milliseconds) start-ms))))))))
 
 
 ;; ! -> Void
@@ -74,7 +78,7 @@ exec racket -t $0 "$@"
        (list))))
 
 
-;; ! (Listof String) -> Void
+;; ! (Listof String) -> Errno
 ;; Runs a command with a given name and optional command line arguments.
 (define (run-command! args)
   (let ((command-name (first args))
@@ -86,9 +90,11 @@ exec racket -t $0 "$@"
           (load-env-variables! (context-envs ctx))
           (log! "running: ~a" command-line)
           (flush-output (current-error-port))
-          (system command-line)))
+          (system/exit-code command-line)))
        (else
-        (log! "Unknown command: ~a~%" command-name)))))
+        (begin
+         (log! "Unknown command: ~a~%" command-name)
+         1)))))
 
 
 ;; Path -> Listof String -> String
@@ -289,15 +295,6 @@ exec racket -t $0 "$@"
                 (parse-envar (fileline "foo bar" 0 "file"))))
 
 
-;; ! (-> Void) -> Void
-;; Executes a function and prints the exection time.
-(define (measure-execution-time! fn)
-  (let ((start-ms (current-milliseconds)))
-    (with-handlers ((exn:break? (λ (_) (log! "user break"))))
-      (fn))
-    (log! "time: ~a ms" (- (current-milliseconds) start-ms))))
-
-
 ;; ! String -> Void
 ;; Logs a message to the stderr.
 (define (log! message . args)
@@ -316,4 +313,4 @@ exec racket -t $0 "$@"
   
 
 ;; Execute the script.
-(measure-execution-time! main!)
+(main!)
