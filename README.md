@@ -33,3 +33,15 @@ $ e foo a b c d
 ... will execute `foo` command script passing `a b c d` arguments.
 
 
+
+Use `!` to execute external command in the modified environment:
+```
+$ e ! env               # show env after applying cmd.env files
+$ e ! 'echo $FOO'       # show value of FOO after applying cmd.env files
+```
+
+
+or to start a new shell in the modified environment:
+```
+$ e !
+```

@@ -81,24 +81,48 @@ exec racket -t $0 "$@"
   (define command-name (first args))
   (define command-args (rest args))
   (define ctx (load-current-context!))
-  (match (assoc command-name (context-cmds ctx))
-    [(cons _ path)
-     (define command-line (path->command-line path command-args))
-     (load-env-variables! (context-envs ctx))
-     (log! "running: ~a" command-line)
-     (flush-output (current-error-port))
-     (system/exit-code command-line)]
-    [else
-     (log! "Unknown command: ~a~%" command-name)
-     1 #| error code (failure) |#]))
+  (define command-line (create-command-line ctx command-name command-args))
+  (if command-line
+      (begin
+       (load-env-variables! (context-envs ctx))
+       (log! "running: ~a" command-line)
+       (flush-output (current-error-port))
+       (system/exit-code command-line))
+      (begin
+       (log! "Unknown command: ~a~%" command-name)
+       1 #| error code (failure) |#)))
 
 
-;; Path -> Listof String -> String
-;; Creates command line to run the file with given arguments.
-(define (path->command-line path args)
-  (define command-str (path->string path))
-  (define quoted-args (map (λ (a) (format "'~a'" a)) args))
-  (string-join (cons command-str quoted-args)))
+;; Context -> String -> Listof String -> String | #f
+;; Creates a command line for a given command and it's arguments.
+(define (create-command-line ctx name args)
+  (define ctx-command (assoc name (context-cmds ctx)))
+  (cond
+    [ctx-command
+     (define command-str (path->string (cdr ctx-command)))
+     (define quoted-args (map (λ (a) (format "'~a'" a)) args))
+     (string-join (cons command-str quoted-args))]
+    [(and (equal? name "!") (empty? args))
+     "$SHELL"]
+    [(equal? name "!")
+     (define command-str (car args))
+     (define quoted-args (map (λ (a) (format "'~a'" a)) (cdr args)))
+     (string-join (cons command-str quoted-args))]
+    [else #f]))
+(module+ test
+  (define my-ctx (context (p-list)
+                         `(("foo" . ,(p "foo1.sh"))
+                           ("foo" . ,(p "foo2.sh")))))
+  (check-equal? (create-command-line my-ctx "foo" '("a" "b" "c"))
+                "foo1.sh 'a' 'b' 'c'")
+  (check-equal? (create-command-line my-ctx "foo" '())
+                "foo1.sh")
+  (check-equal? (create-command-line my-ctx "bar" '())
+                #f)
+  (check-equal? (create-command-line my-ctx "!" '("ls" "-a"))
+                "ls '-a'")
+  (check-equal? (create-command-line my-ctx "!" '())
+                "$SHELL"))
 
 
 ;; Context := ((envs: Listof EnvFile) (cmds: Listof CmdFile))
