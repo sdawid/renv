@@ -152,9 +152,9 @@
     (lambda (envar)
       (or (envar-get. (car envar))
           envar))
-    '(("ENV_ENV_FILE" . ".cmd.env:.env")
-      ("ENV_CMD_PREFIX" . ".cmd-:cmd-")
-      ("ENV_CMD_DIR" . ".cmds"))))
+    '(("ENV_FILE_NAMES" . ".cmd.env:.env")
+      ("ENV_CMD_PREFIXES" . ".cmd-:cmd-")
+      ("ENV_DIR_NAMES" . ".cmds:.envs"))))
 
 
 ;; String -> ?(Name . Value)
@@ -255,7 +255,7 @@
 ;; CatFn := Path -> ListOf String
 (define (load-context-envs ctx files cat)
   (define env-file-names
-    (ctx-env-values ctx "ENV_ENV_FILE"))
+    (ctx-env-values ctx "ENV_FILE_NAMES"))
 
   ;; File -> ?(Path . Env)
   (define (file->file-env f)
@@ -285,7 +285,7 @@
 ;; Context -> ListOf Files -> Context
 (define (load-context-cmds ctx files)
   (define cmd-prefixes
-    (ctx-env-values ctx "ENV_CMD_PREFIX"))
+    (ctx-env-values ctx "ENV_CMD_PREFIXES"))
 
   ;; File -> (Name . Path)
   (define (file->cmd-file f)
@@ -315,7 +315,7 @@
 ;; LoadCtxFn := Context -> Path -> Context
 (define (load-context-from-cmd-dirs ctx files load-ctx)
   (define cmd-dirs
-    (ctx-env-values ctx "ENV_CMD_DIR"))
+    (ctx-env-values ctx "ENV_DIR_NAMES"))
   ;; File -> Boolean
   (define (cmd-dir? f)
     (and (file-directory? f)
@@ -377,10 +377,13 @@
 
 ;; Context -> ()
 (define (show-help. ctx)
-  (out. "Usage: ~a <command> <args>" *prog-name*)
+  (out. "Usage: ~a <command> [<args>]" *prog-name*)
+  (out. "")
+  (out. "Runs a local <command> in a local environment.")
+  (out. "If the <command> is '!', then runs <args> shell command.")
   (out. "")
   (let ()
-    (out. "Available commands:")
+    (out. "Local commands:")
     (for-each
       (lambda (cmd-path)
         (out. " - ~20a -> ~a" (car cmd-path) (cdr cmd-path)))
@@ -389,7 +392,7 @@
       (out. " (none)")))
   (out. "")
   (let ((paths (filter-map car (ctx-envs ctx))))
-    (out. "Environments:")
+    (out. "Local environments:")
     (for-each
       (lambda (path)
         (out. " - ~a" path))
@@ -428,7 +431,7 @@
        (run-cmd. ctx (car cmd-args) (cdr cmd-args)))
       ((equal? "!" cmd-name)
        ; start shell (in a modified environment)
-       (run-cmd. ctx "$SHELL" '()))
+       (run-cmd. ctx (or (getenv "SHELL") "/bin/sh") '()))
       (cmd-path
        ; execute command file
        (run-cmd. ctx cmd-path cmd-args))
