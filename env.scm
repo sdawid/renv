@@ -68,8 +68,15 @@
 
 
 ;; String -> String
-(define (without-file-extension name)
+(define (remove-file-extension name)
   (car (string-split name #\.)))
+
+
+;; String -> String
+(define (remove-trailing-slash path)
+  (if (string-suffix? "/" path)
+    (substring path 0 (- (string-length path) 1))
+    path))
 
 
 ;; File := (file Name Path StatMode)
@@ -294,7 +301,7 @@
          (first-map
          (lambda (p)
            (and (string-prefix? p (file-name f))
-                (cons (without-file-extension (string-remove-prefix p (file-name f)))
+                (cons (remove-file-extension (string-remove-prefix p (file-name f)))
                       (file-path f))))
          cmd-prefixes)))
 
@@ -315,7 +322,8 @@
 ;; LoadCtxFn := Context -> Path -> Context
 (define (load-context-from-cmd-dirs ctx files load-ctx)
   (define cmd-dirs
-    (ctx-env-values ctx "ENV_DIR_NAMES"))
+    (map remove-trailing-slash
+         (ctx-env-values ctx "ENV_DIR_NAMES")))
   ;; File -> Boolean
   (define (cmd-dir? f)
     (and (file-directory? f)
