@@ -1,6 +1,8 @@
 #!/usr/bin/env guile
 !#
 
+;;; Dev style: impure functions are marked with trailing '.'
+
 (use-modules
   (ice-9 format)
   (ice-9 ftw) ; scandir
@@ -12,17 +14,18 @@
 
 ;;; Utilities -----------------------------------------------------------------
 
+;; Any -> ?String
+(define (string-non-empty? str)
+  (and (string? str)
+       (not (string-null? (string-trim str)))))
+
+
 ;; String -> String -> String
 ;; Remove given prefix from the string (if exists).
 (define (string-remove-prefix prefix str)
   (if (string-prefix? prefix str)
     (substring str (string-length prefix))
     str))
-
-
-;; ListOf (ListOf T) -> ListOf T
-(define (list-flatten lists)
-  (apply append lists))
 
 
 ;; (S -> ?T) -> ListOf S -> ?T
@@ -143,7 +146,7 @@
     (and
       value
       (filter
-        (lambda (s) (not (string-null? s)))
+        string-non-empty?
         (string-split value #\:)))))
 
 
@@ -173,7 +176,7 @@
       ((string-null? line) #f)
       ((string-prefix? "#" line) #f)
       (at (cons (string-trim-right (substring line 0 at))
-                (string-trim (substring line (+ 1 at)))))
+                (string-trim (substring line (1+ at)))))
       (else #f))))
 
 
@@ -212,13 +215,12 @@
       (append new-cmds (ctx-cmds ctx)))))
 
 
-;; Context -> Name -> Value
+;; Context -> Name -> ?ListOf Value
 (define (ctx-env-values ctx name)
   (first-map
     (lambda (env)
       (env-values env name))
     (map cdr (ctx-envs ctx))))
-
 
 
 ;; Context -> ((Name . Value) -> ()) -> ()
@@ -289,41 +291,83 @@
   (ctx-append-envs ctx new-envs))
 
 
+;; CmdNameFn -> Context -> ListOf Files -> Context
+;; where:
+;;      CmdNameFn := FileName -> ?CmdName
+(define (load-context-cmds-using name-fn ctx files)
+  (ctx-append-cmds
+    ctx
+    (fold
+      (lambda (f cmds)
+        (let ((name (name-fn (file-name f))))
+          (if name
+            (cons (cons name (file-path f))
+                  cmds)
+            cmds)))
+      (list)
+      (filter
+        (lambda (f)
+          (and (file-regular? f)
+               (file-executable? f)))
+        files))))
+
+
+;; String -> ?(String . String)
+(define (parse-name=value str)
+  (let* ((=idx (string-contains str "="))
+         (name (and =idx (string-trim-both (substring str 0 =idx))))
+         (value (and =idx (string-trim-both (substring str (1+ =idx))))))
+    (and (string-non-empty? name)
+         (string-non-empty? value)
+         (cons name value))))
+
+
 ;; Context -> ListOf Files -> Context
-(define (load-context-cmds ctx files)
+(define (load-context-cmds-from-mappings ctx files)
+  (define cmd-mappings
+    (filter-map
+      parse-name=value
+      (or (ctx-env-values ctx "ENV_CMDS") (list))))
+
+  (define (cmd-name-from-mappings file-name)
+    (first-map
+      (lambda (cn-fn)
+        (and (equal? file-name (cdr cn-fn))
+             (car cn-fn)))
+      cmd-mappings))
+
+  (load-context-cmds-using
+    cmd-name-from-mappings
+    ctx files))
+
+
+;; Context -> ListOf Files -> Context
+(define (load-context-cmds-from-prefixes ctx files)
   (define cmd-prefixes
     (ctx-env-values ctx "ENV_CMD_PREFIXES"))
 
-  ;; File -> (Name . Path)
-  (define (file->cmd-file f)
-    (and (file-regular? f)
-         (file-executable? f)
-         (first-map
-         (lambda (p)
-           (and (string-prefix? p (file-name f))
-                (cons (remove-file-extension (string-remove-prefix p (file-name f)))
-                      (file-path f))))
-         cmd-prefixes)))
+  (define (cmd-name-from-prefixes file-name)
+    (first-map
+      (lambda (p)
+        (and (string-prefix? p file-name)
+             (remove-file-extension
+               (string-remove-prefix p
+                 file-name))))
+      cmd-prefixes))
 
-  (define new-cmds
-    (fold
-      (lambda (f cmds)
-        (let ((cmd-file (file->cmd-file f)))
-          (if cmd-file
-            (cons cmd-file cmds)
-            cmds)))
-      (list)
-      files))
-
-  (ctx-append-cmds ctx new-cmds))
+  (load-context-cmds-using
+    cmd-name-from-prefixes
+    ctx files))
 
 
 ;; Context -> ListOf Files -> LoadCtxFn -> Context
 ;; LoadCtxFn := Context -> Path -> Context
 (define (load-context-from-cmd-dirs ctx files load-ctx)
   (define cmd-dirs
-    (map remove-trailing-slash
-         (ctx-env-values ctx "ENV_DIR_NAMES")))
+    (filter
+      string-non-empty?
+      (map remove-trailing-slash
+           (ctx-env-values ctx "ENV_DIR_NAMES"))))
   ;; File -> Boolean
   (define (cmd-dir? f)
     (and (file-directory? f)
@@ -345,8 +389,10 @@
 (define (load-context ctx dir-path ls cat)
   (let ((files (ls dir-path)))
     (load-context-from-cmd-dirs
-      (load-context-cmds
-        (load-context-envs ctx files cat)
+      (load-context-cmds-from-prefixes
+        (load-context-cmds-from-mappings
+          (load-context-envs ctx files cat)
+          files)
         files)
       files
       (lambda (ctx p)

@@ -94,12 +94,19 @@ $ e !                   # starts default shell
 The `env.scm` script can be configured using following environment variables:
 
 - `ENV_FILE_NAMES`
-  - list of environment file names separated by ':'
+  - environment file names
+  - list of names separated by ':'
   - default value: `.env:.cmd.env`
 
 - `ENV_CMD_PREFIXES`
-  - list of command file prefixes separated by ':'
+  - command file prefixes
+  - list of prefixes separated by ':'
   - default value: `.cmd-:cmd-`
+
+- `ENV_CMDS`
+  - custom command name to path mappings
+  - list of `<name>=<path>` pairs separated by ':' (e.g. 'foo=./foo.sh:bar=mybar.py')
+  - default value: (none)
 
 - `ENV_DIR_NAMES`
   - list of context subdirectory names separated by ':'
