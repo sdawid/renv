@@ -167,16 +167,24 @@
       ("ENV_DIR_NAMES" . ".cmds:.envs"))))
 
 
+;; String -> String
+(define (remove-comment line)
+  (let ((idx (string-index line #\#)))
+    (if idx
+      (substring line 0 idx)
+      line)))
+
+
 ;; String -> ?(Name . Value)
 ;; Parse line from env file.
 (define (parse-envar line)
-  (let* ((line (string-trim-both line))
-         (at (string-index line #\=)))
+  (let* ((line (string-trim-both (remove-comment line)))
+         (=idx (string-index line #\=)))
     (cond
       ((string-null? line) #f)
-      ((string-prefix? "#" line) #f)
-      (at (cons (string-trim-right (substring line 0 at))
-                (string-trim (substring line (1+ at)))))
+      (=idx
+       (cons (string-trim-right (substring line 0 =idx))
+             (string-trim (substring line (1+ =idx)))))
       (else #f))))
 
 

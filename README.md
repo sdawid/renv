@@ -103,7 +103,7 @@ Lines starting with '`#`' are ignored:
 
 ```
 # This is a comment line
-FOO = foo
+FOO = foo # this is also a comment line
 ```
 
 
