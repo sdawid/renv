@@ -63,7 +63,6 @@ $ e foo arg1 arg2 ...
 ```
 
 
-
 ### Run shell commands
 
 You can use `!` to execute a shell commands using local environment:
@@ -86,6 +85,25 @@ Use `!` without any additional arguments to start shell with local environment:
 
 ```
 $ e !                   # starts default shell
+```
+
+
+### Local environment
+
+The current environment is updated with environment varibles
+read from `.env` and `.dot.env` files located in the current context:
+
+```
+FOO=foo
+BAR = value with spaces
+```
+
+**Comments**
+Lines starting with '`#`' are ignored:
+
+```
+# This is a comment line
+FOO = foo
 ```
 
 
