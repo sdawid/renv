@@ -98,12 +98,23 @@ FOO=foo
 BAR = value with spaces
 ```
 
-**Comments**
-Lines starting with '`#`' are ignored:
+'`#`' character starts a **comment**:
 
 ```
 # This is a comment line
-FOO = foo # this is also a comment line
+FOO = foo # this is also a comment
+BAR = bar#part of value, not a comment
+```
+
+Use quotes to disable string trimming, inline comments
+or if you need multiline values:
+
+```
+FOO = " after # space"
+# ^ the value of FOO will be : ' after # space'.
+MULTILINE = 'Lorem ipsum
+dolor sit
+amet'
 ```
 
 

@@ -123,14 +123,9 @@
     (scandir path)))
 
 
-;; Path -> ListOf String
-(define (cat-file. path)
-  (call-with-input-file path
-    (lambda (port)
-      (string-split
-        (get-string-all port)
-        (char-set #\linefeed #\return)))))
-
+;; Path -> (Port -> T) -> T
+(define (read-file. reader path)
+  (call-with-input-file path reader))
 
 
 ;;; Env -----------------------------------------------------------------------
@@ -167,32 +162,120 @@
       ("ENV_DIR_NAMES" . ".cmds:.envs"))))
 
 
-;; String -> String
-(define (remove-comment line)
-  (let ((idx (string-index line #\#)))
-    (if idx
-      (substring line 0 idx)
-      line)))
+;;; Env File Parser -----------------------------------------------------------
+
+;; CharSet -> Port -> ?String
+(define (read-one char-set port)
+  (let ((c (lookahead-char port)))
+    (and (not (eof-object? c))
+         (char-set-contains? char-set c)
+         (string (get-char port)))))
 
 
-;; String -> ?(Name . Value)
-;; Parse line from env file.
-(define (parse-envar line)
-  (let* ((line (string-trim-both (remove-comment line)))
-         (=idx (string-index line #\=)))
-    (cond
-      ((string-null? line) #f)
-      (=idx
-       (cons (string-trim-right (substring line 0 =idx))
-             (string-trim (substring line (1+ =idx)))))
-      (else #f))))
+;; CharSet -> Port -> ?String
+(define (read-many char-set port)
+  (let loop ((cs '()))
+    (let ((c (lookahead-char port)))
+      (if (and (not (eof-object? c))
+               (char-set-contains? char-set c))
+        (loop (cons (get-char port) cs))
+        (apply string (reverse cs))))))
 
 
-;; ListOf String -> Env
-;; Reads env from the env file.
-;; Note: The order of envars in env (association list) should be reversed.
-(define (parse-env-file lines)
-  (reverse (filter-map parse-envar lines)))
+(define char-set:id
+  (char-set-union
+    char-set:letter+digit
+    (char-set #\_)))
+
+(define char-set:eol
+  (char-set #\newline #\linefeed #\page))
+
+(define char-set:not-eol
+  (char-set-complement char-set:eol))
+
+(define char-set:whitespace-not-eol
+  (char-set-difference
+    char-set:whitespace
+    char-set:eol))
+
+(define char-set:not-whitespace
+  (char-set-complement
+    char-set:whitespace))
+
+
+;; Port -> ?String
+(define (read-envar-name port)
+  (read-many char-set:whitespace port)
+  (read-many char-set:id port))
+
+
+;; Port -> ?String
+(define (read-assign-symbol port)
+  (read-many char-set:whitespace-not-eol port)
+  (read-one (char-set #\=) port))
+
+
+(define (read-quoted-string port)
+  (and (read-one (char-set #\') port)
+       (let loop ((cs '()))
+         (let ((c (get-char port)))
+           (if (or (eof-object? c) (char=? #\' c))
+             (apply string (reverse cs))
+             (loop (cons c cs)))))))
+
+
+(define (read-double-quoted-string port)
+  (and (read-one (char-set #\") port)
+       (let loop ((cs '()))
+         (let ((c (get-char port)))
+           (cond
+             ((or (eof-object? c) (char=? #\" c))
+              (apply string (reverse cs)))
+             ((char=? #\\ c)
+              (loop (cons (get-char port) cs)))
+             (else
+               (loop (cons c cs))))))))
+
+
+;; Port -> ?String
+(define (read-envar-value port)
+  (let loop ((ls '()))
+    (let* ((ws (or (read-many char-set:whitespace-not-eol port) ""))
+           (ls* (if (null? ls) ls (cons ws ls)))
+           (c (lookahead-char port)))
+      (cond
+        ((or (eof-object? c)
+             (char-set-contains? char-set:eol c))
+         (apply string-join (list (reverse ls) "")))
+        ((char=? #\# c)
+         (read-many char-set:not-eol port)
+         (loop ls))
+        ((char=? #\' c)
+         (loop (cons (read-quoted-string port) ls*)))
+        ((char=? #\" c)
+         (loop (cons (read-double-quoted-string port) ls*)))
+        (else
+         (loop (cons (read-many char-set:not-whitespace port) ls*)))))))
+
+
+;; Port -> ?(Name . Value)
+(define (read-envar port)
+  (let* ((name (read-envar-name port))
+         (assign? (read-assign-symbol port))
+         (value (read-envar-value port)))
+    (and assign? name value
+         (cons name value))))
+
+
+;; Port -> AssocListOf (Name . Value)
+(define (env-file-reader port)
+  (let loop ((env '()))
+    (if (eof-object? (lookahead-char port))
+      env
+      (let ((envar (read-envar port)))
+        (if envar
+          (loop (cons envar env))
+          (loop env))))))
 
 
 ;;; Context -------------------------------------------------------------------
@@ -268,9 +351,9 @@
             (list)))
 
 
-;; Context -> ListOf File -> CatFn -> Context
-;; CatFn := Path -> ListOf String
-(define (load-context-envs ctx files cat)
+;; Context -> ListOf File -> ReadFn -> Context
+;; ReadFn := Path -> (Port -> T) -> T
+(define (load-context-envs ctx files read)
   (define env-file-names
     (ctx-env-values ctx "ENV_FILE_NAMES"))
 
@@ -283,7 +366,7 @@
         (lambda (n)
           (and (equal? n (file-name f))
                (cons (file-path f)
-                     (parse-env-file (cat (file-path f))))))
+                     (read env-file-reader (file-path f)))))
         env-file-names)))
 
   (define new-envs
@@ -392,26 +475,26 @@
 
 ;; Path -> Context  -> LsFn -> CatFn -> Context
 ;; LsFn := Path -> ListOf File
-;; CatFn := Path -> ListOf String
+;; ReadFn := Path -> (Port -> T) -> T
 ;; Updates hte context from files inside given directory.
-(define (load-context ctx dir-path ls cat)
+(define (load-context ctx dir-path ls read)
   (let ((files (ls dir-path)))
     (load-context-from-cmd-dirs
       (load-context-cmds-from-prefixes
         (load-context-cmds-from-mappings
-          (load-context-envs ctx files cat)
+          (load-context-envs ctx files read)
           files)
         files)
       files
       (lambda (ctx p)
-        (load-context ctx p ls cat)))))
+        (load-context ctx p ls read)))))
 
 
 ;; () -> Context
 (define (load-current-context.)
   (fold
     (lambda (p ctx)
-      (load-context ctx p list-dir. cat-file.))
+      (load-context ctx p list-dir. read-file.))
     (make-default-ctx.)
     (path-parents (getcwd))))
 
