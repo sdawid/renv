@@ -14,7 +14,17 @@
 
 ;;; Utilities -----------------------------------------------------------------
 
-;; Any -> ?String
+(define-syntax-rule (λ e ...)
+  (lambda e ...))
+
+(define-syntax-rule (when p e ...)
+  (if p
+      (begin e ...)
+      #f))
+
+(define some? (negate null?))
+
+;; Any -> Boolean
 (define (string-non-empty? str)
   (and (string? str)
        (not (string-null? (string-trim str)))))
@@ -24,17 +34,15 @@
 ;; Remove given prefix from the string (if exists).
 (define (string-remove-prefix prefix str)
   (if (string-prefix? prefix str)
-    (substring str (string-length prefix))
-    str))
+      (substring str (string-length prefix))
+      str))
 
 
 ;; (S -> ?T) -> ListOf S -> ?T
 (define (first-map fn ls)
-  (fold
-    (lambda (s t)
-      (or t (fn s)))
-    #f
-    ls))
+  (cond ((null? ls) #f)
+        (else (or (fn (car ls))
+                  (first-map fn (cdr ls))))))
 
 
 ;; (try-or fail-value ...exprs)
@@ -44,9 +52,10 @@
   (syntax-rules ()
     ((_ fail-value body-expr ...)
      (with-exception-handler
-       (lambda (exn) fail-value)
-       (lambda () body-expr ...)
-       #:unwind? #t #:unwind-for-type #t))))
+       (λ (exn) fail-value)
+       (λ () body-expr ...)
+       #:unwind? #t
+       #:unwind-for-type #t))))
 
 
 ;;; Path and File -------------------------------------------------------------
@@ -56,18 +65,17 @@
 ;; If name is mepty, do nothing.
 (define (path-append basepath name)
   (if (string-null? name)
-    basepath
-    (string-append
       basepath
-      file-name-separator-string
-      name)))
+      (string-append basepath
+                     file-name-separator-string
+                     name)))
 
 
 ;; Path -> ListOf Path
 (define (path-parents p)
   (if (equal? p "/")
-    (list "/")
-    (cons p (path-parents (dirname p)))))
+      (list "/")
+      (cons p (path-parents (dirname p)))))
 
 
 ;; String -> String
@@ -78,8 +86,8 @@
 ;; String -> String
 (define (remove-trailing-slash path)
   (if (string-suffix? "/" path)
-    (substring path 0 (- (string-length path) 1))
-    path))
+      (substring path 0 (1- (string-length path)))
+      path))
 
 
 ;; File := (file Name Path StatMode)
@@ -106,21 +114,17 @@
 ;; Path -> ?File
 (define (path->file. path)
   (try-or #f
-    (let ((st (stat path)))
-      (make-file
-        (basename path)
-        path
-        (stat:mode st)))))
+    (make-file (basename path)
+               path
+               (stat:mode (stat path)))))
 
 
 ;; Path -> ListOf File
 ;; List directory content.
 (define (list-dir. path)
-  (filter-map
-    (lambda (name)
-      (and (not (member name '("." "..")))
-           (path->file. (path-append path name))))
-    (scandir path)))
+  (filter-map (λ (n) (when (not (member n '("." "..")))
+                       (path->file. (path-append path n))))
+              (scandir path)))
 
 
 ;; Path -> (Port -> T) -> T
@@ -138,28 +142,23 @@
 ;; Env -> String -> ?ListOf String
 (define (env-values env name)
   (let ((value (env-value env name)))
-    (and
-      value
-      (filter
-        string-non-empty?
-        (string-split value #\:)))))
+    (when value
+      (filter string-non-empty? (string-split value #\:)))))
 
 
 ;; String -> ?(Name . Value)
 (define (envar-get. name)
   (let ((value (getenv name)))
-    (and value (cons name value))))
+    (when value
+      (cons name value))))
 
 
 ;; () -> Env
 (define (env-get-default.)
-  (map
-    (lambda (envar)
-      (or (envar-get. (car envar))
-          envar))
-    '(("ENV_FILE_NAMES" . ".cmd.env:.env")
-      ("ENV_CMD_PREFIXES" . ".cmd-:cmd-")
-      ("ENV_DIR_NAMES" . ".cmds:.envs"))))
+  (map (λ (e) (or (envar-get. (car e)) e))
+       '(("ENV_FILE_NAMES" . ".cmd.env:.env")
+         ("ENV_CMD_PREFIXES" . ".cmd-:cmd-")
+         ("ENV_DIR_NAMES" . ".cmds:.envs"))))
 
 
 ;;; Env File Parser -----------------------------------------------------------
@@ -167,9 +166,9 @@
 ;; CharSet -> Port -> ?String
 (define (read-one char-set port)
   (let ((c (lookahead-char port)))
-    (and (not (eof-object? c))
-         (char-set-contains? char-set c)
-         (string (get-char port)))))
+    (when (and (not (eof-object? c))
+               (char-set-contains? char-set c))
+      (string (get-char port)))))
 
 
 ;; CharSet -> Port -> ?String
@@ -178,8 +177,8 @@
     (let ((c (lookahead-char port)))
       (if (and (not (eof-object? c))
                (char-set-contains? char-set c))
-        (loop (cons (get-char port) cs))
-        (apply string (reverse cs))))))
+          (loop (cons (get-char port) cs))
+          (apply string (reverse cs))))))
 
 
 (define char-set:id
@@ -220,21 +219,20 @@
        (let loop ((cs '()))
          (let ((c (get-char port)))
            (if (or (eof-object? c) (char=? #\' c))
-             (apply string (reverse cs))
-             (loop (cons c cs)))))))
+               (apply string (reverse cs))
+               (loop (cons c cs)))))))
 
 
 (define (read-double-quoted-string port)
   (and (read-one (char-set #\") port)
        (let loop ((cs '()))
          (let ((c (get-char port)))
-           (cond
-             ((or (eof-object? c) (char=? #\" c))
-              (apply string (reverse cs)))
-             ((char=? #\\ c)
-              (loop (cons (get-char port) cs)))
-             (else
-               (loop (cons c cs))))))))
+           (cond ((or (eof-object? c) (char=? #\" c))
+                  (apply string (reverse cs)))
+                 ((char=? #\\ c)
+                  (loop (cons (get-char port) cs)))
+                 (else
+                  (loop (cons c cs))))))))
 
 
 ;; Port -> ?String
@@ -243,19 +241,18 @@
     (let* ((ws (or (read-many char-set:whitespace-not-eol port) ""))
            (ls* (if (null? ls) ls (cons ws ls)))
            (c (lookahead-char port)))
-      (cond
-        ((or (eof-object? c)
-             (char-set-contains? char-set:eol c))
-         (apply string-join (list (reverse ls) "")))
-        ((char=? #\# c)
-         (read-many char-set:not-eol port)
-         (loop ls))
-        ((char=? #\' c)
-         (loop (cons (read-quoted-string port) ls*)))
-        ((char=? #\" c)
-         (loop (cons (read-double-quoted-string port) ls*)))
-        (else
-         (loop (cons (read-many char-set:not-whitespace port) ls*)))))))
+      (cond ((or (eof-object? c)
+                 (char-set-contains? char-set:eol c))
+             (apply string-join (list (reverse ls) "")))
+            ((char=? #\# c)
+             (read-many char-set:not-eol port)
+             (loop ls))
+            ((char=? #\' c)
+             (loop (cons (read-quoted-string port) ls*)))
+            ((char=? #\" c)
+             (loop (cons (read-double-quoted-string port) ls*)))
+            (else
+             (loop (cons (read-many char-set:not-whitespace port) ls*)))))))
 
 
 ;; Port -> ?(Name . Value)
@@ -271,11 +268,11 @@
 (define (env-file-reader port)
   (let loop ((env '()))
     (if (eof-object? (lookahead-char port))
-      env
-      (let ((envar (read-envar port)))
-        (if envar
-          (loop (cons envar env))
-          (loop env))))))
+        env
+        (let ((envar (read-envar port)))
+          (if envar
+              (loop (cons envar env))
+              (loop env))))))
 
 
 ;;; Context -------------------------------------------------------------------
@@ -291,10 +288,10 @@
 ;; Context -> AssocListOf (Path . Env) -> Context
 (define (ctx-append-envs ctx new-envs)
   (if (eq? new-envs (ctx-envs ctx))
-    ctx
-    (make-ctx
-      (append new-envs (ctx-envs ctx))
-      (ctx-cmds ctx))))
+      ctx
+      (make-ctx
+        (append new-envs (ctx-envs ctx))
+        (ctx-cmds ctx))))
 
 
 ;; Context -> AssocListOf (Name . Path) -> Context
@@ -308,26 +305,22 @@
 
 ;; Context -> Name -> ?ListOf Value
 (define (ctx-env-values ctx name)
-  (first-map
-    (lambda (env)
-      (env-values env name))
-    (map cdr (ctx-envs ctx))))
+  (first-map (λ (e) (env-values e name))
+             (map cdr (ctx-envs ctx))))
 
 
 ;; Context -> ((Name . Value) -> ()) -> ()
 (define (ctx-for-each-envar ctx fn)
   ;; ListOf (Name . Value) -> ()
   (define (env-apply env)
-    (if (not (null? env))
-      (begin
-        (env-apply (cdr env))
-        (fn (car env)))))
+    (when (some? env)
+      (env-apply (cdr env))
+      (fn (car env))))
   ;; ListOf (Path . ListOf (Name . Value)) -> ()
   (define (envs-apply file-envs)
-    (if (not (null? file-envs))
-      (begin
-        (envs-apply (cdr file-envs))
-        (env-apply (cdar file-envs)))))
+    (when (some? file-envs)
+      (envs-apply (cdr file-envs))
+      (env-apply (cdar file-envs))))
   (envs-apply (ctx-envs ctx)))
 
 
@@ -335,8 +328,7 @@
 (define (ctx-apply-env. ctx)
   (ctx-for-each-envar
     ctx
-    (lambda (envar)
-      (setenv (car envar) (cdr envar)))))
+    (λ (e) (setenv (car e) (cdr e)))))
 
 
 ;; Context -> Name -> ?Path
@@ -359,23 +351,21 @@
 
   ;; File -> ?(Path . Env)
   (define (file->file-env f)
-    (and
-      (file-regular? f)
-      (file-readable? f)
-      (first-map
-        (lambda (n)
-          (and (equal? n (file-name f))
-               (cons (file-path f)
-                     (read env-file-reader (file-path f)))))
-        env-file-names)))
+    (and (file-regular? f)
+         (file-readable? f)
+         (first-map
+           (λ (n) (and (equal? n (file-name f))
+                       (cons (file-path f)
+                             (read env-file-reader (file-path f)))))
+           env-file-names)))
 
   (define new-envs
     (fold
-      (lambda (f envs)
+      (λ (f envs)
           (let ((file-env (file->file-env f)))
             (if file-env
-              (cons file-env envs)
-              envs)))
+                (cons file-env envs)
+                envs)))
       (list)
       files))
 
@@ -389,19 +379,15 @@
   (ctx-append-cmds
     ctx
     (fold
-      (lambda (f cmds)
+      (λ (f cmds)
         (let ((name (name-fn (file-name f))))
           (if name
-            (cons (cons name (file-path f))
-                  cmds)
-            cmds)))
+              (cons (cons name (file-path f))
+                    cmds)
+              cmds)))
       (list)
-      (filter
-        (lambda (f)
-          (and (file-regular? f)
-               (file-executable? f)))
-        files))))
-
+      (filter (λ (f) (and (file-regular? f) (file-executable? f)))
+              files))))
 
 ;; String -> ?(String . String)
 (define (parse-name=value str)
@@ -422,9 +408,8 @@
 
   (define (cmd-name-from-mappings file-name)
     (first-map
-      (lambda (cn-fn)
-        (and (equal? file-name (cdr cn-fn))
-             (car cn-fn)))
+      (λ (m) (and (equal? file-name (cdr m))
+                  (car m)))
       cmd-mappings))
 
   (load-context-cmds-using
@@ -439,11 +424,10 @@
 
   (define (cmd-name-from-prefixes file-name)
     (first-map
-      (lambda (p)
+      (λ (p)
         (and (string-prefix? p file-name)
              (remove-file-extension
-               (string-remove-prefix p
-                 file-name))))
+               (string-remove-prefix p file-name))))
       cmd-prefixes))
 
   (load-context-cmds-using
@@ -464,13 +448,12 @@
     (and (file-directory? f)
          (member (file-name f) cmd-dirs)))
 
-  (fold
-    (lambda (f ctx)
-      (if (cmd-dir? f)
-        (load-ctx ctx (file-path f))
-        ctx))
-    ctx
-    files))
+  (fold (λ (f ctx)
+          (if (cmd-dir? f)
+              (load-ctx ctx (file-path f))
+              ctx))
+        ctx
+        files))
 
 
 ;; Path -> Context  -> LsFn -> CatFn -> Context
@@ -486,17 +469,14 @@
           files)
         files)
       files
-      (lambda (ctx p)
-        (load-context ctx p ls read)))))
+      (λ (ctx p) (load-context ctx p ls read)))))
 
 
 ;; () -> Context
 (define (load-current-context.)
-  (fold
-    (lambda (p ctx)
-      (load-context ctx p list-dir. read-file.))
-    (make-default-ctx.)
-    (path-parents (getcwd))))
+  (fold (λ (p ctx) (load-context ctx p list-dir. read-file.))
+        (make-default-ctx.)
+        (path-parents (getcwd))))
 
 
 ;;; CLI -----------------------------------------------------------------------
@@ -529,21 +509,17 @@
   (out. "")
   (let ()
     (out. "Local commands:")
-    (for-each
-      (lambda (cmd-path)
-        (out. " - ~20a -> ~a" (car cmd-path) (cdr cmd-path)))
-      (ctx-cmds ctx))
+    (for-each (λ (c) (out. " - ~20a -> ~a" (car c) (cdr c)))
+              (ctx-cmds ctx))
     (if (null? (ctx-cmds ctx))
-      (out. " (none)")))
+        (out. " (none)")))
   (out. "")
   (let ((paths (filter-map car (ctx-envs ctx))))
     (out. "Local environments:")
-    (for-each
-      (lambda (path)
-        (out. " - ~a" path))
-      paths)
+    (for-each (λ (p) (out. " - ~a" p))
+              paths)
     (if (null? paths)
-      (out. " (none)")))
+        (out. " (none)")))
   (out. ""))
 
 
@@ -564,25 +540,24 @@
 (define (main.)
   (let* ((ctx (load-current-context.))
          (args (cdr (command-line)))
-         (cmd-name (and (not (null? args)) (car args)))
-         (cmd-args (and (not (null? args)) (cdr args)))
+         (cmd-name (when (some? args) (car args)))
+         (cmd-args (when (some? args) (cdr args)))
          (cmd-path (ctx-find-cmd ctx cmd-name)))
-    (cond
-      ((not cmd-name)
-       ; no args was given - show help
-       (show-help. ctx))
-      ((and (equal? "!" cmd-name) (not (null? cmd-args)))
-       ; execute the command after '!' character (in a modified environment)
-       (run-cmd. ctx (car cmd-args) (cdr cmd-args)))
-      ((equal? "!" cmd-name)
-       ; start shell (in a modified environment)
-       (run-cmd. ctx (or (getenv "SHELL") "/bin/sh") '()))
-      (cmd-path
-       ; execute command file
-       (run-cmd. ctx cmd-path cmd-args))
-      (else 
-       (log. "Unknown command: ~a" cmd-name)
-       (show-help. ctx)))))
+    (cond ((not cmd-name)
+           ; no args was given - show help
+           (show-help. ctx))
+          ((and (equal? "!" cmd-name) (some? cmd-args))
+           ; execute the command after '!' character (in a modified environment)
+           (run-cmd. ctx (car cmd-args) (cdr cmd-args)))
+          ((equal? "!" cmd-name)
+           ; start shell (in a modified environment)
+           (run-cmd. ctx (or (getenv "SHELL") "/bin/sh") '()))
+          (cmd-path
+           ; execute command file
+           (run-cmd. ctx cmd-path cmd-args))
+          (else
+           (log. "Unknown command: ~a" cmd-name)
+           (show-help. ctx)))))
 
 (time-it. main.)
 
