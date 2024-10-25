@@ -117,6 +117,14 @@ dolor sit
 amet'
 ```
 
+Use `$<name>` or `${<name>}` to expand a variable:
+
+```
+NAME=World
+MESSAGE=Hello, ${NAME}!
+```
+
+
 
 ## Configuration
 

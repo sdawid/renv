@@ -1,6 +1,14 @@
 #!/usr/bin/env guile
 !#
 
+
+(define *default-configuration*
+  '(("ENV_FILE_NAMES" . ".cmd.env:.env")
+    ("ENV_CMD_PREFIXES" . ".cmd-:cmd-")
+    ("ENV_DIR_NAMES" . ".cmds:.envs")
+    ("ENV_CMDS" . "")))
+
+
 ;;; Dev style: impure functions are marked with trailing '.'
 
 (use-modules
@@ -28,6 +36,10 @@
 (define (string-non-empty? str)
   (and (string? str)
        (not (string-null? (string-trim str)))))
+
+(define (string-empty? str)
+  (or (not str)
+      (string-null? (string-trim str))))
 
 
 ;; String -> String -> String
@@ -134,31 +146,32 @@
 
 ;;; Env -----------------------------------------------------------------------
 
-;; Env -> String -> ?String
-(define (env-value env name)
-  (cdr (or (assoc name env) '("" . #f))))
+;; Env := AListOf Envar
+;; Envar := (Name . Value)
+(define (make-envar name value)
+  (cons name value))
+
+(define (envar-name envar)
+  (car envar))
+
+(define (envar-value envar)
+  (cdr envar))
 
 
-;; Env -> String -> ?ListOf String
-(define (env-values env name)
-  (let ((value (env-value env name)))
-    (when value
-      (filter string-non-empty? (string-split value #\:)))))
+;; String -> ListOf String
+(define (split-env-value value)
+  (if value
+      (filter string-non-empty? (string-split value #\:))
+      '()))
 
 
-;; String -> ?(Name . Value)
-(define (envar-get. name)
-  (let ((value (getenv name)))
-    (when value
-      (cons name value))))
+;; String -> ?Value
+(define (env-get. name)
+  (getenv name))
 
-
-;; () -> Env
-(define (env-get-default.)
-  (map (λ (e) (or (envar-get. (car e)) e))
-       '(("ENV_FILE_NAMES" . ".cmd.env:.env")
-         ("ENV_CMD_PREFIXES" . ".cmd-:cmd-")
-         ("ENV_DIR_NAMES" . ".cmds:.envs"))))
+;; String -> String -> ()
+(define (env-set. name value)
+  (setenv name value))
 
 
 ;;; Env File Parser -----------------------------------------------------------
@@ -255,16 +268,16 @@
              (loop (cons (read-many char-set:not-whitespace port) ls*)))))))
 
 
-;; Port -> ?(Name . Value)
+;; Port -> ?Envar
 (define (read-envar port)
   (let* ((name (read-envar-name port))
          (assign? (read-assign-symbol port))
          (value (read-envar-value port)))
     (and assign? name value
-         (cons name value))))
+         (make-envar name value))))
 
 
-;; Port -> AssocListOf (Name . Value)
+;; Port -> AListOf Envar
 (define (env-file-reader port)
   (let loop ((env '()))
     (if (eof-object? (lookahead-char port))
@@ -277,58 +290,12 @@
 
 ;;; Context -------------------------------------------------------------------
 
-;; Context := (ctx (AssocListOf (Path . Env)) (AssocListOf (Name . Path)))
+;; Context := (ctx (ListOf Path) (AListOf (Name . Path)))
 (define-record-type <ctx>
   (make-ctx envs cmds)
   ctx?
   (envs ctx-envs)
   (cmds ctx-cmds))
-
-
-;; Context -> AssocListOf (Path . Env) -> Context
-(define (ctx-append-envs ctx new-envs)
-  (if (eq? new-envs (ctx-envs ctx))
-      ctx
-      (make-ctx
-        (append new-envs (ctx-envs ctx))
-        (ctx-cmds ctx))))
-
-
-;; Context -> AssocListOf (Name . Path) -> Context
-(define (ctx-append-cmds ctx new-cmds)
-  (if (eq? new-cmds (ctx-cmds ctx))
-    ctx
-    (make-ctx
-      (ctx-envs ctx)
-      (append new-cmds (ctx-cmds ctx)))))
-
-
-;; Context -> Name -> ?ListOf Value
-(define (ctx-env-values ctx name)
-  (first-map (λ (e) (env-values e name))
-             (map cdr (ctx-envs ctx))))
-
-
-;; Context -> ((Name . Value) -> ()) -> ()
-(define (ctx-for-each-envar ctx fn)
-  ;; ListOf (Name . Value) -> ()
-  (define (env-apply env)
-    (when (some? env)
-      (env-apply (cdr env))
-      (fn (car env))))
-  ;; ListOf (Path . ListOf (Name . Value)) -> ()
-  (define (envs-apply file-envs)
-    (when (some? file-envs)
-      (envs-apply (cdr file-envs))
-      (env-apply (cdar file-envs))))
-  (envs-apply (ctx-envs ctx)))
-
-
-;; Context -> ()
-(define (ctx-apply-env. ctx)
-  (ctx-for-each-envar
-    ctx
-    (λ (e) (setenv (car e) (cdr e)))))
 
 
 ;; Context -> Name -> ?Path
@@ -337,57 +304,24 @@
     (and cmd-path (cdr cmd-path))))
 
 
-;; () -> Context
-(define (make-default-ctx.)
-  (make-ctx (list (cons #f (env-get-default.)))
-            (list)))
-
-
-;; Context -> ListOf File -> ReadFn -> Context
-;; ReadFn := Path -> (Port -> T) -> T
-(define (load-context-envs ctx files read)
+;; ListOf File -> GetFn -> ListOf Path
+(define (find-env-files files eget)
   (define env-file-names
-    (ctx-env-values ctx "ENV_FILE_NAMES"))
-
-  ;; File -> ?(Path . Env)
-  (define (file->file-env f)
+    (split-env-value (eget "ENV_FILE_NAMES")))
+  (define (env-file? f)
     (and (file-regular? f)
          (file-readable? f)
-         (first-map
-           (λ (n) (and (equal? n (file-name f))
-                       (cons (file-path f)
-                             (read env-file-reader (file-path f)))))
-           env-file-names)))
-
-  (define new-envs
-    (fold
-      (λ (f envs)
-          (let ((file-env (file->file-env f)))
-            (if file-env
-                (cons file-env envs)
-                envs)))
-      (list)
-      files))
-
-  (ctx-append-envs ctx new-envs))
+         (member (file-name f) env-file-names)))
+  (map file-path (filter env-file? files)))
 
 
-;; CmdNameFn -> Context -> ListOf Files -> Context
-;; where:
-;;      CmdNameFn := FileName -> ?CmdName
-(define (load-context-cmds-using name-fn ctx files)
-  (ctx-append-cmds
-    ctx
-    (fold
-      (λ (f cmds)
-        (let ((name (name-fn (file-name f))))
-          (if name
-              (cons (cons name (file-path f))
-                    cmds)
-              cmds)))
-      (list)
-      (filter (λ (f) (and (file-regular? f) (file-executable? f)))
-              files))))
+;; Path -> ReadFn -> SetFn -> ()
+(define (load-env-file path read eset)
+  (define (set-envar envar)
+    (eset (envar-name envar) (envar-value envar)))
+  (for-each set-envar
+            (read env-file-reader path)))
+
 
 ;; String -> ?(String . String)
 (define (parse-name=value str)
@@ -398,13 +332,11 @@
          (string-non-empty? value)
          (cons name value))))
 
-
-;; Context -> ListOf Files -> Context
-(define (load-context-cmds-from-mappings ctx files)
+(define (find-cmds files eget)
   (define cmd-mappings
     (filter-map
       parse-name=value
-      (or (ctx-env-values ctx "ENV_CMDS") (list))))
+      (split-env-value (eget "ENV_CMDS"))))
 
   (define (cmd-name-from-mappings file-name)
     (first-map
@@ -412,15 +344,8 @@
                   (car m)))
       cmd-mappings))
 
-  (load-context-cmds-using
-    cmd-name-from-mappings
-    ctx files))
-
-
-;; Context -> ListOf Files -> Context
-(define (load-context-cmds-from-prefixes ctx files)
   (define cmd-prefixes
-    (ctx-env-values ctx "ENV_CMD_PREFIXES"))
+    (split-env-value (eget "ENV_CMD_PREFIXES")))
 
   (define (cmd-name-from-prefixes file-name)
     (first-map
@@ -430,53 +355,69 @@
                (string-remove-prefix p file-name))))
       cmd-prefixes))
 
-  (load-context-cmds-using
-    cmd-name-from-prefixes
-    ctx files))
+  (define (file->cmd file)
+    (let ((cname (or (cmd-name-from-mappings (file-name file))
+                     (cmd-name-from-prefixes (file-name file)))))
+      (when cname
+        (cons cname (file-path file)))))
+
+  (filter-map file->cmd
+              (filter (λ (f) (and (file-regular? f) (file-executable? f)))
+                      files)))
 
 
-;; Context -> ListOf Files -> LoadCtxFn -> Context
-;; LoadCtxFn := Context -> Path -> Context
-(define (load-context-from-cmd-dirs ctx files load-ctx)
+;; ListOf File -> GetFn -> ListOf Path
+(define (find-cmd-dirs files eget)
   (define cmd-dirs
-    (filter
-      string-non-empty?
-      (map remove-trailing-slash
-           (ctx-env-values ctx "ENV_DIR_NAMES"))))
-  ;; File -> Boolean
+    (filter string-non-empty?
+            (map remove-trailing-slash
+                 (split-env-value (eget "ENV_DIR_NAMES")))))
   (define (cmd-dir? f)
     (and (file-directory? f)
          (member (file-name f) cmd-dirs)))
-
-  (fold (λ (f ctx)
-          (if (cmd-dir? f)
-              (load-ctx ctx (file-path f))
-              ctx))
-        ctx
-        files))
+  (map file-path
+       (filter cmd-dir? files)))
 
 
-;; Path -> Context  -> LsFn -> CatFn -> Context
+
+;; ListOf Path  -> LsFn -> CatFn -> GetFn -> SetFn -> Context
 ;; LsFn := Path -> ListOf File
 ;; ReadFn := Path -> (Port -> T) -> T
-;; Updates hte context from files inside given directory.
-(define (load-context ctx dir-path ls read)
-  (let ((files (ls dir-path)))
-    (load-context-from-cmd-dirs
-      (load-context-cmds-from-prefixes
-        (load-context-cmds-from-mappings
-          (load-context-envs ctx files read)
-          files)
-        files)
-      files
-      (λ (ctx p) (load-context ctx p ls read)))))
+;; GetFn := Name -> ?Value
+;; SetFn := Name -> Value -> ()
+;; Updates the context from files inside given directory.
+(define (load-context paths ls read eget eset)
+  (let loop ((paths paths))
+    (if (null? paths)
+        (make-ctx '() '())
+        (let* ((files (ls (car paths)))
+               (new-envs (find-env-files files eget))
+               (new-cmds (find-cmds files eget))
+               (env-dirs (find-cmd-dirs files eget)))
+          (for-each (λ (path) (load-env-file path read eset)) new-envs)
+          (let ((ctx (loop (append env-dirs (cdr paths)))))
+            (make-ctx
+              (append (ctx-envs ctx) new-envs)
+              (append (ctx-cmds ctx) new-cmds)))))))
+
+
+
+(define (load-default-configuration eget eset)
+  (define (set-if-not-set default)
+    (let* ((name (envar-name default))
+           (old-value (eget name))
+           (new-value (envar-value default)))
+      (if (and (string-empty? old-value)
+               (string-non-empty? new-value))
+        (eset name new-value))))
+  (for-each set-if-not-set *default-configuration*))
 
 
 ;; () -> Context
 (define (load-current-context.)
-  (fold (λ (p ctx) (load-context ctx p list-dir. read-file.))
-        (make-default-ctx.)
-        (path-parents (getcwd))))
+  (load-default-configuration env-get. env-set.)
+  (load-context (reverse (path-parents (getcwd)))
+                list-dir. read-file. env-get. env-set.))
 
 
 ;;; CLI -----------------------------------------------------------------------
@@ -514,7 +455,7 @@
     (if (null? (ctx-cmds ctx))
         (out. " (none)")))
   (out. "")
-  (let ((paths (filter-map car (ctx-envs ctx))))
+  (let ((paths (ctx-envs ctx)))
     (out. "Local environments:")
     (for-each (λ (p) (out. " - ~a" p))
               paths)
@@ -531,7 +472,6 @@
 ;; Context -> String -> ListOf String -> ()
 (define (run-cmd. ctx path args)
   (log. "Running: ~a" path)
-  (ctx-apply-env. ctx)
   (system (string-join
             (cons path (map quote-arg args))
             " ")))
