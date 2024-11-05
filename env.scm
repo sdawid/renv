@@ -1,4 +1,4 @@
-#!/usr/bin/env guile
+#!/usr/bin/env -S guile -e main
 !#
 
 
@@ -25,10 +25,10 @@
 (define-syntax-rule (λ e ...)
   (lambda e ...))
 
-(define-syntax-rule (when p e ...)
-  (if p
-      (begin e ...)
-      #f))
+(define-syntax when
+  (syntax-rules ()
+    ((_ p) p)
+    ((_ p e ...) (if p (begin e ...) #f))))
 
 (define some? (negate null?))
 
@@ -36,6 +36,7 @@
 (define (string-non-empty? str)
   (and (string? str)
        (not (string-null? (string-trim str)))))
+
 
 (define (string-empty? str)
   (or (not str)
@@ -146,26 +147,13 @@
 
 ;;; Env -----------------------------------------------------------------------
 
-;; Env := AListOf Envar
-;; Envar := (Name . Value)
-(define (make-envar name value)
-  (cons name value))
-
-(define (envar-name envar)
-  (car envar))
-
-(define (envar-value envar)
-  (cdr envar))
-
-
 ;; String -> ListOf String
 (define (split-env-value value)
   (if value
       (filter string-non-empty? (string-split value #\:))
       '()))
 
-
-;; String -> ?Value
+;; String -> ?String
 (define (env-get. name)
   (getenv name))
 
@@ -176,6 +164,16 @@
 
 ;;; Env File Parser -----------------------------------------------------------
 
+(define char-set:id
+  (char-set-union char-set:letter+digit (char-set #\_)))
+
+(define char-set:eol
+  (char-set #\newline #\linefeed #\page))
+
+(define char-set:whitespace-not-eol
+  (char-set-difference char-set:whitespace char-set:eol))
+
+
 ;; CharSet -> Port -> ?String
 (define (read-one char-set port)
   (let ((c (lookahead-char port)))
@@ -185,107 +183,182 @@
 
 
 ;; CharSet -> Port -> ?String
-(define (read-many char-set port)
+(define (read-while char-set port)
   (let loop ((cs '()))
     (let ((c (lookahead-char port)))
       (if (and (not (eof-object? c))
                (char-set-contains? char-set c))
           (loop (cons (get-char port) cs))
-          (apply string (reverse cs))))))
+          (when (not (null? cs))
+            (apply string (reverse cs)))))))
 
 
-(define char-set:id
-  (char-set-union
-    char-set:letter+digit
-    (char-set #\_)))
+;; CharSet -> Port -> ?String
+(define (read-until char-set port)
+  (read-while (char-set-complement char-set) port))
 
-(define char-set:eol
-  (char-set #\newline #\linefeed #\page))
 
-(define char-set:not-eol
-  (char-set-complement char-set:eol))
+;; Port -> ?String
+(define (read-quoted-string port)
+  (when (read-one (char-set #\') port)
+        (let ((s (read-until (char-set #\') port)))
+          (get-char port)
+          s)))
 
-(define char-set:whitespace-not-eol
-  (char-set-difference
-    char-set:whitespace
-    char-set:eol))
 
-(define char-set:not-whitespace
-  (char-set-complement
-    char-set:whitespace))
+;; Port -> ?String
+(define (read-variable port)
+  (when (read-one (char-set #\$) port)
+        (if (read-one (char-set #\{) port)
+            (let ((s (read-until (char-set #\}) port)))
+              (get-char port)
+              s)
+            (read-while char-set:id port))))
+
+
+;; Template := ListOf (StringValue | WhitespaceValue | VariableValue)
+;; StringValue := ('string . String)
+;; WhitespaceValue := ('whitespace . String)
+;; VariableValue := ('variable . String)
+
+;; Template
+(define empty-template '())
+
+;; String -> Template -> Template
+(define (append-string value template)
+  (cons (cons 'string value) template))
+
+;; String -> Template -> Template
+(define (append-whitespace whitespace template)
+  (cons (cons 'whitespace whitespace) template))
+
+;; String -> Template -> Template
+(define (append-variable name template)
+  (cons (cons 'variable name) template))
+
+
+;; Template -> Template
+(define (trim-template template)
+  (define (trim-left template)
+    (drop-while (λ (v) (eq? (car v) 'whitespace)) template))
+  (trim-left (reverse (trim-left (reverse template)))))
+
+
+;; Template -> GetFn -> String
+;; GetFn := (String -> ?String)
+(define (resolve-template template get)
+  (define (resolve t-value)
+    (let ((type (car t-value))
+          (value (cdr t-value)))
+      (case type
+        ((variable) (or (get value) ""))
+        (else value))))
+  (string-join (map resolve template) ""))
+
+
+;; Port -> Template
+(define (read-double-quoted-string port)
+  (define (quoted-string-template)
+    (let ((c (lookahead-char port)))
+      (cond ((eof-object? c)
+             empty-template)
+            ((char=? #\" c)
+             (get-char port)
+             empty-template)
+            ((char=? #\\ c)
+             (get-char port)
+             (append-string (string (get-char port))
+                            (quoted-string-template)))
+            ((char=? #\$ c)
+             (append-variable (read-variable port)
+                              (quoted-string-template)))
+            (else
+             (append-string (read-until (char-set #\" #\\ #\$) port)
+                            (quoted-string-template))))))
+  (when (read-one (char-set #\") port)
+        (quoted-string-template)))
+
+
+;; Port -> Template
+(define (read-value port)
+  (define (value-template)
+    (let ((c (lookahead-char port)))
+      (cond ((eof-object? c)
+             empty-template)
+            ((char-set-contains? char-set:eol c)
+             empty-template)
+            ((char=? #\# c)
+             (read-until char-set:eol port)
+             empty-template)
+            ((char=? #\' c)
+             (append-string (read-quoted-string port)
+                            (value-template)))
+            ((char=? #\" c)
+             (append (read-double-quoted-string port)
+                     (value-template)))
+            ((char=? #\$ c)
+             (append-variable (read-variable port)
+                              (value-template)))
+            ((char=? #\\ c)
+             (get-char port)
+             (append-string (string (get-char port))
+                            (value-template)))
+            ((char-set-contains? char-set:whitespace-not-eol c)
+             (append-whitespace (read-while char-set:whitespace-not-eol port)
+                                (value-template)))
+            (else
+             (append-string (read-until (char-set-union
+                                          char-set:whitespace
+                                          (char-set #\# #\' #\" #\$ #\\))
+                                        port)
+                            (value-template))))))
+  (trim-template (value-template)))
+
+
+;; Envar := (Name . Template)
+(define (make-envar name template)
+  (cond ((string? template)
+         (list name (cons 'string template)))
+        ((list? template)
+         (cons name template))
+        (else error "Expected String or List of templates")))
+
+(define (envar-name envar)
+  (car envar))
+
+(define (envar-template envar)
+  (cdr envar))
 
 
 ;; Port -> ?String
 (define (read-envar-name port)
-  (read-many char-set:whitespace port)
-  (read-many char-set:id port))
+  (read-while char-set:whitespace port)
+  (read-while char-set:id port))
 
 
 ;; Port -> ?String
 (define (read-assign-symbol port)
-  (read-many char-set:whitespace-not-eol port)
+  (read-while char-set:whitespace-not-eol port)
   (read-one (char-set #\=) port))
-
-
-(define (read-quoted-string port)
-  (and (read-one (char-set #\') port)
-       (let loop ((cs '()))
-         (let ((c (get-char port)))
-           (if (or (eof-object? c) (char=? #\' c))
-               (apply string (reverse cs))
-               (loop (cons c cs)))))))
-
-
-(define (read-double-quoted-string port)
-  (and (read-one (char-set #\") port)
-       (let loop ((cs '()))
-         (let ((c (get-char port)))
-           (cond ((or (eof-object? c) (char=? #\" c))
-                  (apply string (reverse cs)))
-                 ((char=? #\\ c)
-                  (loop (cons (get-char port) cs)))
-                 (else
-                  (loop (cons c cs))))))))
-
-
-;; Port -> ?String
-(define (read-envar-value port)
-  (let loop ((ls '()))
-    (let* ((ws (or (read-many char-set:whitespace-not-eol port) ""))
-           (ls* (if (null? ls) ls (cons ws ls)))
-           (c (lookahead-char port)))
-      (cond ((or (eof-object? c)
-                 (char-set-contains? char-set:eol c))
-             (apply string-join (list (reverse ls) "")))
-            ((char=? #\# c)
-             (read-many char-set:not-eol port)
-             (loop ls))
-            ((char=? #\' c)
-             (loop (cons (read-quoted-string port) ls*)))
-            ((char=? #\" c)
-             (loop (cons (read-double-quoted-string port) ls*)))
-            (else
-             (loop (cons (read-many char-set:not-whitespace port) ls*)))))))
 
 
 ;; Port -> ?Envar
 (define (read-envar port)
   (let* ((name (read-envar-name port))
          (assign? (read-assign-symbol port))
-         (value (read-envar-value port)))
-    (and assign? name value
-         (make-envar name value))))
+         (template (read-value port)))
+    (and assign? name template
+         (make-envar name template))))
 
 
 ;; Port -> AListOf Envar
 (define (env-file-reader port)
-  (let loop ((env '()))
-    (if (eof-object? (lookahead-char port))
-        env
-        (let ((envar (read-envar port)))
-          (if envar
-              (loop (cons envar env))
-              (loop env))))))
+  (if (eof-object? (lookahead-char port))
+      '()
+      (let ((envar (read-envar port)))
+        (if envar
+            (cons envar (env-file-reader port))
+            (env-file-reader port)))))
 
 
 ;;; Context -------------------------------------------------------------------
@@ -315,10 +388,11 @@
   (map file-path (filter env-file? files)))
 
 
-;; Path -> ReadFn -> SetFn -> ()
-(define (load-env-file path read eset)
+;; Path -> ReadFn -> GetFn -> SetFn -> ()
+(define (load-env-file path read eget eset)
   (define (set-envar envar)
-    (eset (envar-name envar) (envar-value envar)))
+    (eset (envar-name envar)
+          (resolve-template (envar-template envar) eget)))
   (for-each set-envar
             (read env-file-reader path)))
 
@@ -394,19 +468,18 @@
                (new-envs (find-env-files files eget))
                (new-cmds (find-cmds files eget))
                (env-dirs (find-cmd-dirs files eget)))
-          (for-each (λ (path) (load-env-file path read eset)) new-envs)
+          (for-each (λ (path) (load-env-file path read eget eset)) new-envs)
           (let ((ctx (loop (append env-dirs (cdr paths)))))
             (make-ctx
               (append (ctx-envs ctx) new-envs)
               (append (ctx-cmds ctx) new-cmds)))))))
 
 
-
 (define (load-default-configuration eget eset)
   (define (set-if-not-set default)
-    (let* ((name (envar-name default))
-           (old-value (eget name))
-           (new-value (envar-value default)))
+    (let* ((name (car default))
+           (new-value (cdr default))
+           (old-value (eget name)))
       (if (and (string-empty? old-value)
                (string-non-empty? new-value))
         (eset name new-value))))
@@ -466,7 +539,7 @@
 
 ;; String -> String
 (define (quote-arg str)
-  (format #f "'~a'" str))
+  (format #f "\"~a\"" str))
 
 
 ;; Context -> String -> ListOf String -> ()
@@ -477,9 +550,9 @@
             " ")))
 
 
-(define (main.)
+(define (main. args)
   (let* ((ctx (load-current-context.))
-         (args (cdr (command-line)))
+         (args (cdr args))
          (cmd-name (when (some? args) (car args)))
          (cmd-args (when (some? args) (cdr args)))
          (cmd-path (ctx-find-cmd ctx cmd-name)))
@@ -499,5 +572,6 @@
            (log. "Unknown command: ~a" cmd-name)
            (show-help. ctx)))))
 
-(time-it. main.)
+(define (main args)
+  (time-it. (λ () (main. args))))
 

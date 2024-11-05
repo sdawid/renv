@@ -77,7 +77,7 @@ $ e ! env               # show env after applying .env files
 >
 > ```
 > $ e ! echo \$ENV_FILE_NAMES
-> $ e ! 'echo $ENV_FILE_NAMES'
+> $ e ! echo '$ENV_FILE_NAMES'
 > $ e ! 'env | grep ENV_'
 > ```
 
