@@ -14,8 +14,7 @@
 (use-modules
   (ice-9 format)
   (ice-9 ftw) ; scandir
-  (ice-9 match)
-  (ice-9 textual-ports) ; get-string-all
+  (ice-9 textual-ports)
   (srfi srfi-1) ; lists
   (srfi srfi-9)) ; records
 
@@ -30,6 +29,7 @@
     ((_ p) p)
     ((_ p e ...) (if p (begin e ...) #f))))
 
+;; ListOf T -> Boolean
 (define some? (negate null?))
 
 ;; Any -> Boolean
@@ -38,6 +38,7 @@
        (not (string-null? (string-trim str)))))
 
 
+;; Any -> Boolean
 (define (string-empty? str)
   (or (not str)
       (string-null? (string-trim str))))
@@ -502,7 +503,7 @@
 (define *prog-name* (basename (first (command-line))))
 
 (define (log. msg . args)
-  (format #t "(~a) ~?~%" *prog-name* msg args))
+  (format (current-error-port) "(~a) ~?~%" *prog-name* msg args))
 
 
 (define (time-it. thunk)
