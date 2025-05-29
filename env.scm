@@ -503,7 +503,7 @@
 (define *prog-name* (basename (first (command-line))))
 
 (define (log. msg . args)
-  (format (current-error-port) "(~a) ~?~%" *prog-name* msg args))
+  (format (current-error-port) "\x1b[36m(~a) ~?~%\x1b[0m" *prog-name* msg args))
 
 
 (define (time-it. thunk)
